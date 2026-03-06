@@ -2,3 +2,4 @@ python-telegram-bot
 requests
 pillow
 beautifulsoup4
+cloudscraper

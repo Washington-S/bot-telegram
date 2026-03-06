@@ -1,6 +1,7 @@
 import re
 import time
 import hashlib
+import cloudscraper
 import requests
 import json
 from bs4 import BeautifulSoup
@@ -75,60 +76,46 @@ def extrair_id(link, html_content=None):
 # =============================
 
 def buscar_produto_ml(item_id):
-
+    # O cloudscraper pula a proteção contra bots que bloqueia o Railway
+    scraper = cloudscraper.create_scraper()
+    
     url = f"https://www.mercadolivre.com.br/p/MLB{item_id}"
-    
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept-Language": "pt-BR,pt;q=0.9"
-    }
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
 
-    res = requests.get(url, headers=headers, timeout=15)
-    
-    # Se não encontrar na página de catálogo (/p/), tenta a página de produto direto
-    if res.status_code != 200:
-        url = f"https://produto.mercadolivre.com.br/MLB-{item_id}"
-        res = requests.get(url, headers=headers, timeout=15)
+    try:
+        res = scraper.get(url, headers=headers, timeout=15)
+        if res.status_code != 200:
+            url = f"https://produto.mercadolivre.com.br/MLB-{item_id}"
+            res = scraper.get(url, headers=headers, timeout=15)
 
-    soup = BeautifulSoup(res.text, "html.parser")
+        soup = BeautifulSoup(res.text, "html.parser")
 
-    # Nome do produto
-    nome_tag = soup.find("h1", {"class": "ui-pdp-title"})
-    nome = nome_tag.text.strip() if nome_tag else "Produto"
+        # Captura o nome
+        nome_tag = soup.find("h1", {"class": "ui-pdp-title"})
+        nome = nome_tag.text.strip() if nome_tag else "Produto"
 
-    # --- LÓGICA DE PREÇO CORRIGIDA ---
-    # Buscamos a meta tag específica que contém o valor numérico puro
-    meta_preco = soup.find("meta", {"property": "product:price:amount"})
-    
-    if meta_preco:
-        preco = float(meta_preco["content"])
-    else:
-        # Fallback: tenta encontrar o preço no esquema de dados JSON da página
-        try:
-            json_data = soup.find("script", {"type": "application/ld+json"})
-            if json_data:
-                dados = json.loads(json_data.text)
-                # O JSON pode ser uma lista ou um objeto único
-                if isinstance(dados, list):
-                    preco = float(dados[0]['offers']['price'])
-                else:
-                    preco = float(dados['offers']['price'])
+        # Captura o preço REAL via Dados Estruturados (JSON-LD)
+        preco = 0.0
+        json_script = soup.find("script", {"type": "application/ld+json"})
+        if json_script:
+            dados = json.loads(json_script.text)
+            if isinstance(dados, list):
+                for item in dados:
+                    if 'offers' in item:
+                        preco = float(item['offers']['price'])
+                        break
             else:
-                preco = 0.0
-        except:
-            preco = 0.0
+                preco = float(dados['offers']['price'])
 
-    # Imagem
-    meta_img = soup.find("meta", property="og:image")
-    foto = meta_img["content"] if meta_img else ""
-    foto = melhorar_imagem(foto)
+        # Captura a imagem e aplica sua função de melhoria
+        meta_img = soup.find("meta", property="og:image")
+        foto = melhorar_imagem(meta_img["content"]) if meta_img else ""
 
-    return {
-        "nome": nome,
-        "preco": preco,
-        "foto": foto
-    }
+        return {"nome": nome, "preco": preco, "foto": foto}
 
+    except Exception as e:
+        print(f"Erro: {e}")
+        return {"nome": "Erro ao carregar", "preco": 0.0, "foto": ""}
 
 # =============================
 # SHOPEE
