@@ -51,13 +51,11 @@ def extrair_id(link, html_content=None):
     return (None,None)
 
 # =============================
-# MERCADO LIVRE (VERSÃO RAILWAY)
+# MERCADO LIVRE
 # =============================
 
 def buscar_produto_ml(item_id):
-    # O cloudscraper é vital para o Railway não ser bloqueado pelo Mercado Livre
     scraper = cloudscraper.create_scraper()
-    
     url = f"https://www.mercadolivre.com.br/p/MLB{item_id}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"}
 
@@ -69,11 +67,9 @@ def buscar_produto_ml(item_id):
 
         soup = BeautifulSoup(res.text, "html.parser")
 
-        # Captura o nome com fallback
         nome_tag = soup.find("h1", {"class": "ui-pdp-title"})
         nome = nome_tag.text.strip() if nome_tag else "Produto"
 
-        # Captura o preço REAL via JSON-LD (Ignora o preço riscado/antigo)
         preco = 0.0
         json_script = soup.find("script", {"type": "application/ld+json"})
         if json_script:
@@ -86,28 +82,26 @@ def buscar_produto_ml(item_id):
             else:
                 preco = float(dados['offers']['price'])
 
-        # Se o JSON falhar, tenta meta tag
         if preco == 0.0:
             meta_p = soup.find("meta", {"property": "product:price:amount"})
             if meta_p:
                 preco = float(meta_p["content"])
 
-        # Captura imagem e melhora resolução
         meta_img = soup.find("meta", property="og:image")
         foto = melhorar_imagem(meta_img["content"]) if meta_img else ""
 
         return {"nome": nome, "preco": preco, "foto": foto}
 
     except Exception as e:
-        print(f"Erro no Scraping: {e}")
-        return {"nome": "Erro ao carregar dados", "preco": 0.0, "foto": ""}
+        print(f"Erro ML: {e}")
+        return {"nome": "Erro ao carregar", "preco": 0.0, "foto": ""}
 
 # =============================
 # SHOPEE
 # =============================
 
 def buscar_produto_shopee(link_expandido):
-    match = re.search(r"i\.(\d+)\.(\d+)",link_expandido)
+    match = re.search(r"i\.(\d+)\.(\d+)", link_expandido)
     if not match:
         return None
 
@@ -127,38 +121,43 @@ def buscar_produto_shopee(link_expandido):
       }}
     }}
     '''
-    body = json.dumps({"query":query})
+    body = json.dumps({"query": query})
     payload = f"{SHOPEE_APP_KEY}{timestamp}{body}{SHOPEE_APP_SECRET}"
     signature = hashlib.sha256(payload.encode()).hexdigest()
 
     headers = {
-        "Authorization":f"SHA256 Credential={SHOPEE_APP_KEY}, Signature={signature}, Timestamp={timestamp}",
-        "Content-Type":"application/json"
+        "Authorization": f"SHA256 Credential={SHOPEE_APP_KEY}, Signature={signature}, Timestamp={timestamp}",
+        "Content-Type": "application/json"
     }
 
-    r = requests.post(url_api,data=body,headers=headers)
+    r = requests.post(url_api, data=body, headers=headers)
     dados = r.json()
-    prod = dados["data"]["productOfferV2"]["nodes"][0]
-
-    return {
-        "nome":prod["productName"],
-        "preco":prod["priceMin"],
-        "foto":prod["imageUrl"],
-        "link_afiliado":prod.get("offerLink")
-    }
+    
+    try:
+        prod = dados["data"]["productOfferV2"]["nodes"][0]
+        # Garantimos que o preço seja tratado como float para não dar erro na formatação
+        return {
+            "nome": prod["productName"],
+            "preco": float(prod["priceMin"]), 
+            "foto": prod["imageUrl"],
+            "link_afiliado": prod.get("offerLink")
+        }
+    except Exception as e:
+        print(f"Erro Shopee: {e}")
+        return None
 
 # =============================
 # BOT
 # =============================
 
-async def responder(update:Update,context:ContextTypes.DEFAULT_TYPE):
+async def responder(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = update.message.text
     await update.message.reply_text("🔎 Rastreando produto...")
 
     try:
-        # Usa cloudscraper aqui também para expandir o link meli.la sem erro
-        s = cloudscraper.create_scraper()
-        res = s.get(link, allow_redirects=True, headers={"User-Agent":"Mozilla/5.0"}, timeout=15)
+        # Usando scraper para expandir o link e evitar bloqueio de rede
+        scraper_redir = cloudscraper.create_scraper()
+        res = scraper_redir.get(link, allow_redirects=True, timeout=15)
 
         plat, item_id = extrair_id(res.url, res.text)
 
@@ -170,8 +169,13 @@ async def responder(update:Update,context:ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Não consegui identificar o produto")
             return
 
-        # Formatação de preço para exibir com vírgula
-        preco_formatado = f"{produto['preco']:.2f}".replace(".", ",")
+        if not produto:
+            await update.message.reply_text("❌ Erro ao obter dados do produto.")
+            return
+
+        # Correção do erro 'f': garantimos que preco é float antes de formatar
+        preco_val = float(produto['preco'])
+        preco_formatado = f"{preco_val:.2f}".replace(".", ",")
         
         msg = f"""
 🛍 {produto['nome']}
@@ -183,7 +187,7 @@ async def responder(update:Update,context:ContextTypes.DEFAULT_TYPE):
         await update.message.reply_photo(produto["foto"], caption=msg)
 
     except Exception as e:
-        print(f"Erro no processamento: {e}")
+        print(f"Erro no bot: {e}")
         await update.message.reply_text("❌ Erro ao processar link. Tente novamente.")
 
 # =============================
