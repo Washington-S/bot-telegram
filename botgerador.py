@@ -33,33 +33,35 @@ def melhorar_imagem(url):
 
 def extrair_id(link, html_content=None):
 
-    ml_match = re.search(r"MLB-?(\d{8,12})", link, re.IGNORECASE)
+    # padrão MLB clássico
+    ml = re.search(r"MLB[-_]?(\d+)", link, re.IGNORECASE)
+    if ml:
+        return ("ML", ml.group(1))
 
-    if ml_match:
-        return ("ML", ml_match.group(1))
+    # padrão /p/MLB123
+    ml2 = re.search(r"/p/MLB(\d+)", link, re.IGNORECASE)
+    if ml2:
+        return ("ML", ml2.group(1))
 
-    shopee_match = re.search(r"i\.(\d+)\.(\d+)", link)
+    # Shopee
+    sh = re.search(r"i\.(\d+)\.(\d+)", link)
+    if sh:
+        return ("SH", f"{sh.group(1)}/{sh.group(2)}")
 
-    if shopee_match:
-        return ("SH", f"{shopee_match.group(1)}/{shopee_match.group(2)}")
-
+    # tentar pegar do HTML
     if html_content:
 
-        soup = BeautifulSoup(html_content,'html.parser')
+        soup = BeautifulSoup(html_content,"html.parser")
 
+        # procurar qualquer link MLB
         for a in soup.find_all("a",href=True):
 
             href = a["href"]
 
-            m_ml = re.search(r"MLB-?(\d{8,12})",href,re.IGNORECASE)
+            ml3 = re.search(r"MLB[-_]?(\d+)", href, re.IGNORECASE)
 
-            if m_ml:
-                return ("ML",m_ml.group(1))
-
-            m_sh = re.search(r"i\.(\d+)\.(\d+)",href)
-
-            if m_sh:
-                return ("SH",f"{m_sh.group(1)}/{m_sh.group(2)}")
+            if ml3:
+                return ("ML", ml3.group(1))
 
     return (None,None)
 
@@ -68,35 +70,63 @@ def extrair_id(link, html_content=None):
 # MERCADO LIVRE
 # =============================
 
+# =============================
+# MERCADO LIVRE (VERSÃO ROBUSTA)
+# =============================
+
 def buscar_produto_ml(item_id):
 
-    url = f"https://produto.mercadolivre.com.br/MLB-{item_id}"
+    url = f"https://www.mercadolivre.com.br/p/MLB{item_id}"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept-Language": "pt-BR,pt;q=0.9"
+    }
 
-    headers = {"User-Agent":"Mozilla/5.0"}
+    res = requests.get(url, headers=headers, timeout=15)
+    
+    # Se não encontrar na página de catálogo (/p/), tenta a página de produto direto
+    if res.status_code != 200:
+        url = f"https://produto.mercadolivre.com.br/MLB-{item_id}"
+        res = requests.get(url, headers=headers, timeout=15)
 
-    res = requests.get(url,headers=headers)
+    soup = BeautifulSoup(res.text, "html.parser")
 
-    soup = BeautifulSoup(res.text,"html.parser")
+    # Nome do produto
+    nome_tag = soup.find("h1", {"class": "ui-pdp-title"})
+    nome = nome_tag.text.strip() if nome_tag else "Produto"
 
-    # nome
-    nome = soup.find("h1",{"class":"ui-pdp-title"}).text.strip()
+    # --- LÓGICA DE PREÇO CORRIGIDA ---
+    # Buscamos a meta tag específica que contém o valor numérico puro
+    meta_preco = soup.find("meta", {"property": "product:price:amount"})
+    
+    if meta_preco:
+        preco = float(meta_preco["content"])
+    else:
+        # Fallback: tenta encontrar o preço no esquema de dados JSON da página
+        try:
+            json_data = soup.find("script", {"type": "application/ld+json"})
+            if json_data:
+                dados = json.loads(json_data.text)
+                # O JSON pode ser uma lista ou um objeto único
+                if isinstance(dados, list):
+                    preco = float(dados[0]['offers']['price'])
+                else:
+                    preco = float(dados['offers']['price'])
+            else:
+                preco = 0.0
+        except:
+            preco = 0.0
 
-    # preço
-    meta_p = soup.find("meta",{"itemprop":"price"})
-    preco = float(meta_p["content"]) if meta_p else 0.0
-
-    # imagem GRANDE
-    foto = ""
-
-    meta_img = soup.find("meta",property="og:image")
-
-    if meta_img:
-        foto = meta_img["content"]
+    # Imagem
+    meta_img = soup.find("meta", property="og:image")
+    foto = meta_img["content"] if meta_img else ""
+    foto = melhorar_imagem(foto)
 
     return {
-        "nome":nome,
-        "preco":preco,
-        "foto":foto
+        "nome": nome,
+        "preco": preco,
+        "foto": foto
     }
 
 
